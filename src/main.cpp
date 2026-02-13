@@ -1,0 +1,147 @@
+#include <Arduino.h>
+#include <micro_ros_platformio.h>
+#include <rcl/rcl.h>
+#include <rclc/executor.h>
+#include <rclc/rclc.h>
+#include <std_msgs/msg/string.h>
+#include <ArduinoJson.h>
+
+#include <can/core.hpp>
+
+// CAN
+can::CanCommunicator* can_comm;
+
+// ROS 2
+rcl_subscription_t robot_control_sub;
+rcl_publisher_t robot_status_pub;
+std_msgs__msg__String robot_control_msg;
+std_msgs__msg__String robot_status_msg;
+char rx_json_buffer[1024];
+char tx_json_buffer[512];
+
+rclc_executor_t executor;
+rclc_support_t support;
+rcl_allocator_t allocator;
+rcl_node_t node;
+
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
+
+void error_loop() { while(1) delay(100); }
+
+// CAN -> ROS フィードバック処理
+void register_can_listeners() {
+  can_comm->add_receive_event_listener(
+    {0x10, 0x30, 0x31, 0x40, 0x41, 0x4A, 0x4B, 0x4C, 0x4D},
+    [&](const can::CanId id, const std::array<uint8_t, 8> data) {
+      StaticJsonDocument<256> status_doc;
+      status_doc["id"] = (uint32_t)id;
+      
+      if (id == 0x10) {
+        float voltage = (float)((data[1] << 8) | data[2]) / 100.0f;
+        status_doc["battery_12v"] = voltage;
+      } else {
+        status_doc["val"] = data[1]; // 完了状態など
+      }
+
+      serializeJson(status_doc, tx_json_buffer);
+      robot_status_msg.data.data = tx_json_buffer;
+      robot_status_msg.data.size = strlen(tx_json_buffer);
+      rcl_publish(&robot_status_pub, &robot_status_msg, NULL);
+    }
+  );
+}
+
+// ROS -> CAN 制御コマンド処理 (準拠: can.md & 6yca...)
+void robot_control_callback(const void* msgin) {
+  const std_msgs__msg__String* msg = (const std_msgs__msg__String*)msgin;
+  StaticJsonDocument<1024> doc;
+  if (deserializeJson(doc, msg->data.data)) return;
+
+  can::CanTxMessageBuilder builder;
+
+  // 1. 櫓制御 (0x300: 昇降, 0x400: ハンド)
+  if (doc.containsKey("yagura")) {
+    auto y = doc["yagura"];
+    // 系統 1 & 2
+    for (int i = 1; i <= 2; i++) {
+      char pos_key[8], state_key[8];
+      sprintf(pos_key, "%d_pos", i);
+      sprintf(state_key, "%d_state", i);
+
+      if (y.containsKey(pos_key)) {
+        const char* p = y[pos_key];
+        uint8_t cmd = 0x02; // stopped
+        if (strcmp(p, "up") == 0) cmd = 0x01;
+        else if (strcmp(p, "down") == 0) cmd = 0x00;
+        can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(i == 1 ? cmd : cmd + 0x10).build());
+      }
+      if (y.containsKey(state_key)) {
+        const char* s = y[state_key];
+        uint8_t cmd = 0x02; // stopped
+        if (strcmp(s, "open") == 0) cmd = 0x01;
+        else if (strcmp(s, "closed") == 0) cmd = 0x00;
+        can_comm->transmit(builder.set_id(can::CanId(0x400)).set_command(i == 1 ? cmd : cmd + 0x10).build());
+      }
+    }
+  }
+
+  // 2. リング制御 (0x401: ハンド)
+  if (doc.containsKey("ring")) {
+    auto r = doc["ring"];
+    for (int i = 1; i <= 2; i++) {
+      char pos_key[8], state_key[8];
+      sprintf(pos_key, "%d_pos", i);
+      sprintf(state_key, "%d_state", i);
+
+      if (r.containsKey(pos_key)) {
+        const char* p = r[pos_key];
+        uint8_t val = 0x00; // pickup
+        if (strcmp(p, "yagura") == 0) val = 0x01;
+        else if (strcmp(p, "honmaru") == 0) val = 0x02;
+        can_comm->transmit(builder.set_id(can::CanId(0x401)).set_command(i == 1 ? 0x00 : 0x20).set_value((uint32_t)val).build());
+      }
+      if (r.containsKey(state_key)) {
+        const char* s = r[state_key];
+        uint8_t cmd = 0x12; // stopped
+        if (strcmp(s, "open") == 0) cmd = 0x11; // 把持
+        else if (strcmp(s, "closed") == 0) cmd = 0x10; // リリース
+        can_comm->transmit(builder.set_id(can::CanId(0x401)).set_command(i == 1 ? cmd : cmd + 0x20).build());
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  can_comm = new can::CanCommunicator();
+  can_comm->setup();
+
+  // 起動時の電源供給ON指令 (0x100)
+  can::CanTxMessageBuilder pwr;
+  can_comm->transmit(pwr.set_id(can::CanId(0x100)).set_command(0x00).set_omake({0x01, 0x01, 0x01}).build());
+
+  set_microros_serial_transports(Serial);
+  allocator = rcl_get_default_allocator();
+  RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+  RCCHECK(rclc_node_init_default(&node, "hwmc_node", "", &support));
+
+  robot_control_msg.data.data = rx_json_buffer;
+  robot_control_msg.data.capacity = 1024;
+  robot_status_msg.data.data = tx_json_buffer;
+  robot_status_msg.data.capacity = 512;
+
+  RCCHECK(rclc_subscription_init_default(&robot_control_sub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), "/robot_control"));
+  RCCHECK(rclc_publisher_init_default(&robot_status_pub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), "/robot_status"));
+
+  register_can_listeners();
+
+  executor = rclc_executor_get_zero_initialized_executor();
+  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+  RCCHECK(rclc_executor_add_subscription(&executor, &robot_control_sub, &robot_control_msg, &robot_control_callback, ON_NEW_DATA));
+}
+
+void loop() {
+  can_comm->process_received_messages();
+  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+  delay(1);
+}
