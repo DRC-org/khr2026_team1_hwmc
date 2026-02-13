@@ -8,6 +8,13 @@
 
 #include <can/core.hpp>
 
+// Hardware Pins
+#define HOME_SW_PIN 34 // Example pin for limit switch
+
+// State
+bool is_homed = false;
+bool is_homing_in_progress = false;
+
 // CAN
 can::CanCommunicator* can_comm;
 
@@ -28,6 +35,14 @@ rcl_node_t node;
 
 void error_loop() { while(1) delay(100); }
 
+// ホーミング開始
+void start_homing() {
+  is_homing_in_progress = true;
+  can::CanTxMessageBuilder builder;
+  // Move lift 1 down slowly (0x300, command 0x00)
+  can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(0x00).build());
+}
+
 // CAN -> ROS フィードバック処理
 void register_can_listeners() {
   can_comm->add_receive_event_listener(
@@ -40,7 +55,7 @@ void register_can_listeners() {
         float voltage = (float)((data[1] << 8) | data[2]) / 100.0f;
         status_doc["battery_12v"] = voltage;
       } else {
-        status_doc["val"] = data[1]; // 完了状態など
+        status_doc["val"] = data[1];
       }
 
       serializeJson(status_doc, tx_json_buffer);
@@ -51,18 +66,18 @@ void register_can_listeners() {
   );
 }
 
-// ROS -> CAN 制御コマンド処理 (準拠: can.md & 6yca...)
+// ROS -> CAN 制御コマンド処理
 void robot_control_callback(const void* msgin) {
+  if (!is_homed) return; // Ignore commands until homed
+
   const std_msgs__msg__String* msg = (const std_msgs__msg__String*)msgin;
   StaticJsonDocument<1024> doc;
   if (deserializeJson(doc, msg->data.data)) return;
 
   can::CanTxMessageBuilder builder;
 
-  // 1. 櫓制御 (0x300: 昇降, 0x400: ハンド)
   if (doc.containsKey("yagura")) {
     auto y = doc["yagura"];
-    // 系統 1 & 2
     for (int i = 1; i <= 2; i++) {
       char pos_key[8], state_key[8];
       sprintf(pos_key, "%d_pos", i);
@@ -70,14 +85,14 @@ void robot_control_callback(const void* msgin) {
 
       if (y.containsKey(pos_key)) {
         const char* p = y[pos_key];
-        uint8_t cmd = 0x02; // stopped
+        uint8_t cmd = 0x02;
         if (strcmp(p, "up") == 0) cmd = 0x01;
         else if (strcmp(p, "down") == 0) cmd = 0x00;
         can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(i == 1 ? cmd : cmd + 0x10).build());
       }
       if (y.containsKey(state_key)) {
         const char* s = y[state_key];
-        uint8_t cmd = 0x02; // stopped
+        uint8_t cmd = 0x02;
         if (strcmp(s, "open") == 0) cmd = 0x01;
         else if (strcmp(s, "closed") == 0) cmd = 0x00;
         can_comm->transmit(builder.set_id(can::CanId(0x400)).set_command(i == 1 ? cmd : cmd + 0x10).build());
@@ -85,7 +100,6 @@ void robot_control_callback(const void* msgin) {
     }
   }
 
-  // 2. リング制御 (0x401: ハンド)
   if (doc.containsKey("ring")) {
     auto r = doc["ring"];
     for (int i = 1; i <= 2; i++) {
@@ -95,16 +109,16 @@ void robot_control_callback(const void* msgin) {
 
       if (r.containsKey(pos_key)) {
         const char* p = r[pos_key];
-        uint8_t val = 0x00; // pickup
+        uint8_t val = 0x00;
         if (strcmp(p, "yagura") == 0) val = 0x01;
         else if (strcmp(p, "honmaru") == 0) val = 0x02;
         can_comm->transmit(builder.set_id(can::CanId(0x401)).set_command(i == 1 ? 0x00 : 0x20).set_value((uint32_t)val).build());
       }
       if (r.containsKey(state_key)) {
         const char* s = r[state_key];
-        uint8_t cmd = 0x12; // stopped
-        if (strcmp(s, "open") == 0) cmd = 0x11; // 把持
-        else if (strcmp(s, "closed") == 0) cmd = 0x10; // リリース
+        uint8_t cmd = 0x12;
+        if (strcmp(s, "open") == 0) cmd = 0x11;
+        else if (strcmp(s, "closed") == 0) cmd = 0x10;
         can_comm->transmit(builder.set_id(can::CanId(0x401)).set_command(i == 1 ? cmd : cmd + 0x20).build());
       }
     }
@@ -113,10 +127,12 @@ void robot_control_callback(const void* msgin) {
 
 void setup() {
   Serial.begin(115200);
+  pinMode(HOME_SW_PIN, INPUT_PULLUP);
+
   can_comm = new can::CanCommunicator();
   can_comm->setup();
 
-  // 起動時の電源供給ON指令 (0x100)
+  // Power ON (0x100)
   can::CanTxMessageBuilder pwr;
   can_comm->transmit(pwr.set_id(can::CanId(0x100)).set_command(0x00).set_omake({0x01, 0x01, 0x01}).build());
 
@@ -138,10 +154,24 @@ void setup() {
   executor = rclc_executor_get_zero_initialized_executor();
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor, &robot_control_sub, &robot_control_msg, &robot_control_callback, ON_NEW_DATA));
+
+  // Start Homing
+  start_homing();
 }
 
 void loop() {
   can_comm->process_received_messages();
+  
+  if (is_homing_in_progress) {
+    if (digitalRead(HOME_SW_PIN) == LOW) {
+      can::CanTxMessageBuilder builder;
+      can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(0x02).build());
+      is_homed = true;
+      is_homing_in_progress = false;
+      Serial.println("Homing Complete!");
+    }
+  }
+
   rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
   delay(1);
 }
