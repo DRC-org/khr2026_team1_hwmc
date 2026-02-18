@@ -50,6 +50,25 @@ rcl_node_t node;
 robot_msgs__msg__HandMessage feedback_msg;
 robot_msgs__msg__HandMessage control_msg;
 
+// 各アクチュエータの状態
+struct ActuatorState {
+  uint8_t pos =
+      0;  // yagura: UP=0,DOWN=1,STOPPED=2,UP_DONE=3,DOWN_DONE=4
+          // ring:
+          // YAGURA=0,HONMARU=1,STOPPED=2,PICKUP_DONE=3,YAGURA_DONE=4,HONMARU_DONE=5
+  uint8_t state = 0;  // OPEN=0,CLOSE=1,STOPPED=2,OPEN_DONE=3,CLOSE_DONE=4
+};
+
+struct MechanismStates {
+  ActuatorState yagura_1;
+  ActuatorState yagura_2;
+  ActuatorState ring_1;
+  ActuatorState ring_2;
+};
+
+MechanismStates target{};   // 目標値
+MechanismStates current{};  // 現在値
+
 void error_loop() {
   while (true) {
     delay(100);
@@ -60,7 +79,81 @@ void error_loop() {
 IRAM_ATTR void on_control_command(const void* msg_in) {
   const auto* cmd = static_cast<const robot_msgs__msg__HandMessage*>(msg_in);
 
-  // TODO: cmd をもとに CAN 通信する
+  if (xSemaphoreTake(DataMutex, portMAX_DELAY) == pdTRUE) {
+    target.yagura_1 = {cmd->yagura_1.pos, cmd->yagura_1.state};
+    target.yagura_2 = {cmd->yagura_2.pos, cmd->yagura_2.state};
+    target.ring_1 = {cmd->ring_1.pos, cmd->ring_1.state};
+    target.ring_2 = {cmd->ring_2.pos, cmd->ring_2.state};
+
+    xSemaphoreGive(DataMutex);
+  }
+
+  for (int i = 0; i < 2; i++) {
+    const ActuatorState& tgt = (i == 0) ? target.yagura_1 : target.yagura_2;
+    const ActuatorState& cur = (i == 0) ? current.yagura_1 : current.yagura_2;
+
+    if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_UP &&
+        cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP &&
+        cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP_DONE) {
+      // TODO: 櫓ハンドを UP
+    } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_DOWN &&
+               cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN &&
+               cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE) {
+      // TODO: 櫓ハンドを DOWN
+    } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_STOPPED &&
+               cur.pos != robot_msgs__msg__YaguraMechanism__POS_STOPPED) {
+      // TODO: 櫓ハンドを STOP
+    }
+
+    if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_OPEN &&
+        cur.state != robot_msgs__msg__YaguraMechanism__STATE_OPEN &&
+        cur.state != robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE) {
+      // TODO: 櫓ハンドを OPEN
+    } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
+               cur.state != robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
+               cur.state !=
+                   robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE) {
+      // TODO: 櫓ハンドを CLOSE
+    } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_STOPPED &&
+               cur.state != robot_msgs__msg__YaguraMechanism__STATE_STOPPED) {
+      // TODO: 櫓ハンドを STOP
+    }
+  }
+
+  for (int i = 0; i < 2; i++) {
+    const ActuatorState& tgt = (i == 0) ? target.ring_1 : target.ring_2;
+    const ActuatorState& cur = (i == 0) ? current.ring_1 : current.ring_2;
+
+    if (tgt.pos == robot_msgs__msg__RingMechanism__POS_PICKUP &&
+        cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP &&
+        cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP_DONE) {
+      // TODO: リングハンドを PICKUP ポジションへ
+    } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_YAGURA &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA_DONE) {
+      // TODO: リングハンドを YAGURA ポジションへ
+    } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_HONMARU &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU_DONE) {
+      // TODO: リングハンドを HONMARU ポジションへ
+    } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_STOPPED &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_STOPPED) {
+      // TODO: リングハンドを STOP
+    }
+
+    if (tgt.state == robot_msgs__msg__RingMechanism__STATE_OPEN &&
+        cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN &&
+        cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN_DONE) {
+      // TODO: リングハンドを OPEN
+    } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_CLOSE &&
+               cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE &&
+               cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE) {
+      // TODO: リングハンドを CLOSE
+    } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_STOPPED &&
+               cur.state != robot_msgs__msg__RingMechanism__STATE_STOPPED) {
+      // TODO: リングハンドを STOP
+    }
+  }
 }
 
 // 100 ms ごとにフィードバックを送信する
@@ -68,7 +161,14 @@ IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
                                        int64_t /*last_call_time*/) {
   if (timer == nullptr) return;
 
-  // TODO: CAN で取得した値を入れる
+  if (xSemaphoreTake(DataMutex, portMAX_DELAY) == pdTRUE) {
+    feedback_msg.yagura_1 = {current.yagura_1.pos, current.yagura_1.state};
+    feedback_msg.yagura_2 = {current.yagura_2.pos, current.yagura_2.state};
+    feedback_msg.ring_1 = {current.ring_1.pos, current.ring_1.state};
+    feedback_msg.ring_2 = {current.ring_2.pos, current.ring_2.state};
+
+    xSemaphoreGive(DataMutex);
+  }
 
   RCSOFTCHECK(rcl_publish(&pub_feedback, &feedback_msg, nullptr));
 }
