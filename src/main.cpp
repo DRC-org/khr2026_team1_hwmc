@@ -9,6 +9,7 @@
 #include <robot_msgs/msg/hand_message.h>
 
 #include <can/core.hpp>
+#include <can/peripheral.hpp>
 
 TaskHandle_t MicroROSTaskHandle = NULL;
 TaskHandle_t ControlTaskHandle = NULL;
@@ -88,6 +89,8 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
     xSemaphoreGive(DataMutex);
   }
 
+  // TODO: CanTxMessageBuilder の仕様が今年と異なるので修正する
+
   for (int i = 0; i < 2; i++) {
     const ActuatorState& tgt = (i == 0) ? target.yagura_1 : target.yagura_2;
     const ActuatorState& cur = (i == 0) ? current.yagura_1 : current.yagura_2;
@@ -95,28 +98,46 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
     if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_UP &&
         cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP &&
         cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP_DONE) {
-      // TODO: 櫓ハンドを UP
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::dc_lift)
+                             .set_command((i == 0) ? 0x01 : 0x11)
+                             .build());
     } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_DOWN &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE) {
-      // TODO: 櫓ハンドを DOWN
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::dc_lift)
+                             .set_command((i == 0) ? 0x00 : 0x10)
+                             .build());
     } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_STOPPED) {
-      // TODO: 櫓ハンドを STOP
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::dc_lift)
+                             .set_command((i == 0) ? 0x02 : 0x12)
+                             .build());
     }
 
     if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__YaguraMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE) {
-      // TODO: 櫓ハンドを OPEN
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_yagura)
+                             .set_command((i == 0) ? 0x01 : 0x11)
+                             .build());
     } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
                cur.state !=
                    robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE) {
-      // TODO: 櫓ハンドを CLOSE
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_yagura)
+                             .set_command((i == 0) ? 0x00 : 0x10)
+                             .build());
     } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_STOPPED &&
                cur.state != robot_msgs__msg__YaguraMechanism__STATE_STOPPED) {
-      // TODO: 櫓ハンドを STOP
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_yagura)
+                             .set_command((i == 0) ? 0x02 : 0x12)
+                             .build());
     }
   }
 
@@ -127,31 +148,55 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
     if (tgt.pos == robot_msgs__msg__RingMechanism__POS_PICKUP &&
         cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP &&
         cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP_DONE) {
-      // TODO: リングハンドを PICKUP ポジションへ
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x00 : 0x20)
+                             .set_value(0x00)
+                             .build());
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_YAGURA &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA_DONE) {
-      // TODO: リングハンドを YAGURA ポジションへ
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x00 : 0x20)
+                             .set_value(0x01)
+                             .build());
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_HONMARU &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU_DONE) {
-      // TODO: リングハンドを HONMARU ポジションへ
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x00 : 0x20)
+                             .set_value(0x02)
+                             .build());
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_STOPPED) {
-      // TODO: リングハンドを STOP
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x01 : 0x21)
+                             .build());
     }
 
     if (tgt.state == robot_msgs__msg__RingMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN_DONE) {
-      // TODO: リングハンドを OPEN
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x11 : 0x31)
+                             .build());
     } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE) {
-      // TODO: リングハンドを CLOSE
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x10 : 0x30)
+                             .build());
     } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_STOPPED &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_STOPPED) {
-      // TODO: リングハンドを STOP
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(can::CanDest::servo_ring)
+                             .set_command((i == 0) ? 0x12 : 0x32)
+                             .build());
     }
   }
 }
