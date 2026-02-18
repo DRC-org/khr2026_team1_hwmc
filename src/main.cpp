@@ -1,165 +1,140 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
+#include <WiFi.h>
 #include <micro_ros_platformio.h>
+#include <rcl/error_handling.h>
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
+#include <robot_msgs/msg/robot_feedback.h>
 #include <std_msgs/msg/string.h>
-#include <ArduinoJson.h>
 
 #include <can/core.hpp>
 
-// Hardware Pins
-#define HOME_SW_1_PIN 34
-#define HOME_SW_2_PIN 35
+// WiFi / micro-ROS agent の設定
+#define WIFI_SSID "your_ssid"
+#define WIFI_PASS "your_password"
+#define AGENT_IP IPAddress(192, 168, 1, 100)
+#define AGENT_PORT 8888
 
-// State
-bool is_homed_1 = false;
-bool is_homed_2 = false;
-bool is_homing_1_in_progress = false;
-bool is_homing_2_in_progress = false;
+#define RCCHECK(fn)         \
+  {                         \
+    rcl_ret_t rc = (fn);    \
+    if (rc != RCL_RET_OK) { \
+      error_loop();         \
+    }                       \
+  }
+#define RCSOFTCHECK(fn)  \
+  {                      \
+    rcl_ret_t rc = (fn); \
+    (void)rc;            \
+  }
 
-// CAN
-can::CanCommunicator* can_comm;
-
-// ROS 2
-rcl_subscription_t robot_control_sub;
-rcl_publisher_t robot_status_pub;
-std_msgs__msg__String robot_control_msg;
-std_msgs__msg__String robot_status_msg;
-char rx_json_buffer[1024];
-char tx_json_buffer[512];
-
+// micro-ROS オブジェクト
+rcl_publisher_t pub_feedback;
+rcl_subscription_t sub_control;
+rcl_timer_t timer_feedback;
 rclc_executor_t executor;
 rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
 
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
+// メッセージバッファ
+robot_msgs__msg__RobotFeedback feedback_msg;
+std_msgs__msg__String control_msg;
+static char control_buf[512];
 
-void error_loop() { while(1) delay(100); }
-
-// ホーミング開始
-void start_homing() {
-  is_homing_1_in_progress = true;
-  is_homing_2_in_progress = true;
-  can::CanTxMessageBuilder builder;
-  // Move both lifts down slowly (0x00 for Lift 1, 0x10 for Lift 2)
-  can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(0x00).build());
-  can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(0x10).build());
+void error_loop() {
+  while (true) {
+    delay(100);
+  }
 }
 
-// CAN -> ROS フィードバック処理
-void register_can_listeners() {
-  can_comm->add_receive_event_listener(
-    {0x10, 0x30, 0x31, 0x40, 0x41, 0x4A, 0x4B, 0x4C, 0x4D},
-    [&](const can::CanId id, const std::array<uint8_t, 8> data) {
-      StaticJsonDocument<256> status_doc;
-      status_doc["id"] = (uint32_t)id;
-      if (id == 0x10) {
-        float voltage = (float)((data[1] << 8) | data[2]) / 100.0f;
-        status_doc["battery_12v"] = voltage;
-      } else {
-        status_doc["val"] = data[1];
-      }
-      serializeJson(status_doc, tx_json_buffer);
-      robot_status_msg.data.data = tx_json_buffer;
-      robot_status_msg.data.size = strlen(tx_json_buffer);
-      rcl_publish(&robot_status_pub, &robot_status_msg, NULL);
-    }
-  );
+// robot_control トピックのコールバック（JSON 文字列を受信）
+void on_control_command(const void* msg_in) {
+  const auto* cmd = static_cast<const std_msgs__msg__String*>(msg_in);
+
+  JsonDocument doc;
+  DeserializationError err =
+      deserializeJson(doc, cmd->data.data, cmd->data.size);
+  if (err) return;
+
+  if (doc["m3508_rpms"].is<JsonObject>()) {
+    float fl = doc["m3508_rpms"]["fl"] | 0.0f;
+    float fr = doc["m3508_rpms"]["fr"] | 0.0f;
+    float rl = doc["m3508_rpms"]["rl"] | 0.0f;
+    float rr = doc["m3508_rpms"]["rr"] | 0.0f;
+    // TODO: CAN バスで各 M3508 に目標 RPM を送信
+    (void)fl;
+    (void)fr;
+    (void)rl;
+    (void)rr;
+  }
+
+  if (doc["pid_gains"].is<JsonObject>()) {
+    float kp = doc["pid_gains"]["kp"] | 0.5f;
+    float ki = doc["pid_gains"]["ki"] | 0.05f;
+    float kd = doc["pid_gains"]["kd"] | 0.0f;
+    // TODO: PID ゲインを更新
+    (void)kp;
+    (void)ki;
+    (void)kd;
+  }
 }
 
-// ROS -> CAN 制御コマンド処理
-void robot_control_callback(const void* msgin) {
-  if (!is_homed_1 || !is_homed_2) return; // Command gating until homed
+// 100 ms ごとにフィードバックを送信するタイマーコールバック
+void timer_feedback_callback(rcl_timer_t* timer, int64_t /*last_call_time*/) {
+  if (timer == nullptr) return;
 
-  const std_msgs__msg__String* msg = (const std_msgs__msg__String*)msgin;
-  StaticJsonDocument<1024> doc;
-  if (deserializeJson(doc, msg->data.data)) return;
+  // TODO: CAN バスから実際の RPM を読み取り feedback_msg に格納する
+  // 例:
+  //   feedback_msg.m3508_rpms.fl = can_get_rpm(CAN_M3508_FL);
+  //   feedback_msg.m3508_rpms.fr = can_get_rpm(CAN_M3508_FR);
+  //   feedback_msg.m3508_rpms.rl = can_get_rpm(CAN_M3508_RL);
+  //   feedback_msg.m3508_rpms.rr = can_get_rpm(CAN_M3508_RR);
 
-  can::CanTxMessageBuilder builder;
+  // TODO: 各機構の状態を取得して格納する
+  // 例:
+  //   feedback_msg.yagura_1.pos   = ROBOT_MSGS__MSG__YAGURA_MECHANISM__POS_UP;
+  //   feedback_msg.yagura_1.state =
+  //   ROBOT_MSGS__MSG__YAGURA_MECHANISM__STATE_OPEN;
 
-  if (doc.containsKey("yagura")) {
-    auto y = doc["yagura"];
-    for (int i = 1; i <= 2; i++) {
-      char p_key[8], s_key[8];
-      sprintf(p_key, "%d_pos", i); sprintf(s_key, "%d_state", i);
-      if (y.containsKey(p_key)) {
-        const char* p = y[p_key]; uint8_t cmd = 0x02;
-        if (strcmp(p, "up") == 0) cmd = 0x01; else if (strcmp(p, "down") == 0) cmd = 0x00;
-        can_comm->transmit(builder.set_id(can::CanId(0x300)).set_command(i == 1 ? cmd : cmd + 0x10).build());
-      }
-      if (y.containsKey(s_key)) {
-        const char* s = y[s_key]; uint8_t cmd = 0x02;
-        if (strcmp(s, "open") == 0) cmd = 0x01; else if (strcmp(s, "closed") == 0) cmd = 0x00;
-        can_comm->transmit(builder.set_id(can::CanId(0x400)).set_command(i == 1 ? cmd : cmd + 0x10).build());
-      }
-    }
-  }
-
-  if (doc.containsKey("ring")) {
-    auto r = doc["ring"];
-    for (int i = 1; i <= 2; i++) {
-      char p_key[8], s_key[8];
-      sprintf(p_key, "%d_pos", i); sprintf(s_key, "%d_state", i);
-      if (r.containsKey(p_key)) {
-        const char* p = r[p_key]; uint8_t v = 0x00;
-        if (strcmp(p, "yagura") == 0) v = 0x01; else if (strcmp(p, "honmaru") == 0) v = 0x02;
-        can_comm->transmit(builder.set_id(can::CanId(0x401)).set_command(i == 1 ? 0x00 : 0x20).set_value((uint32_t)v).build());
-      }
-      if (r.containsKey(s_key)) {
-        const char* s = r[s_key]; uint8_t cmd = 0x12;
-        if (strcmp(s, "open") == 0) cmd = 0x11; else if (strcmp(s, "closed") == 0) cmd = 0x10;
-        can_comm->transmit(builder.set_id(can::CanId(0x401)).set_command(i == 1 ? cmd : cmd + 0x20).build());
-      }
-    }
-  }
+  RCSOFTCHECK(rcl_publish(&pub_feedback, &feedback_msg, nullptr));
 }
 
 void setup() {
   Serial.begin(115200);
-  pinMode(HOME_SW_1_PIN, INPUT_PULLUP);
-  pinMode(HOME_SW_2_PIN, INPUT_PULLUP);
 
-  can_comm = new can::CanCommunicator();
-  can_comm->setup();
+  // micro-ROS WiFi トランスポートの初期化（内部で WiFi 接続も行う）
+  set_microros_wifi_transports(WIFI_SSID, WIFI_PASS, AGENT_IP, AGENT_PORT);
 
-  can::CanTxMessageBuilder pwr;
-  can_comm->transmit(pwr.set_id(can::CanId(0x100)).set_command(0x00).set_omake({0x01, 0x01, 0x01}).build());
-
-  set_microros_serial_transports(Serial);
   allocator = rcl_get_default_allocator();
-  RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+  RCCHECK(rclc_support_init(&support, 0, nullptr, &allocator));
   RCCHECK(rclc_node_init_default(&node, "hwmc_node", "", &support));
 
-  robot_control_msg.data.data = rx_json_buffer;
-  robot_control_msg.data.capacity = 1024;
-  robot_status_msg.data.data = tx_json_buffer;
-  robot_status_msg.data.capacity = 512;
+  // Publisher: robot_feedback (RobotFeedback 型)
+  RCCHECK(rclc_publisher_init_default(
+      &pub_feedback, &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(robot_msgs, msg, RobotFeedback),
+      "robot_feedback"));
 
-  RCCHECK(rclc_subscription_init_default(&robot_control_sub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), "/robot_control"));
-  RCCHECK(rclc_publisher_init_default(&robot_status_pub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), "/robot_status"));
+  // Subscriber: robot_control (String 型, JSON)
+  control_msg.data.data = control_buf;
+  control_msg.data.size = 0;
+  control_msg.data.capacity = sizeof(control_buf);
+  RCCHECK(rclc_subscription_init_default(
+      &sub_control, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+      "robot_control"));
 
-  register_can_listeners();
-  executor = rclc_executor_get_zero_initialized_executor();
-  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
-  RCCHECK(rclc_executor_add_subscription(&executor, &robot_control_sub, &robot_control_msg, &robot_control_callback, ON_NEW_DATA));
+  // タイマー: 100 ms ごとにフィードバック送信
+  RCCHECK(rclc_timer_init_default(&timer_feedback, &support, RCL_MS_TO_NS(100),
+                                  timer_feedback_callback));
 
-  start_homing();
+  // エグゼキュータ: サブスクライバ 1 + タイマー 1
+  RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+  RCCHECK(rclc_executor_add_subscription(&executor, &sub_control, &control_msg,
+                                         &on_control_command, ON_NEW_DATA));
+  RCCHECK(rclc_executor_add_timer(&executor, &timer_feedback));
 }
 
-void loop() {
-  can_comm->process_received_messages();
-  
-  if (is_homing_1_in_progress && digitalRead(HOME_SW_1_PIN) == LOW) {
-    can::CanTxMessageBuilder b; can_comm->transmit(b.set_id(can::CanId(0x300)).set_command(0x02).build());
-    is_homed_1 = true; is_homing_1_in_progress = false; Serial.println("Lift 1 Homed!");
-  }
-  if (is_homing_2_in_progress && digitalRead(HOME_SW_2_PIN) == LOW) {
-    can::CanTxMessageBuilder b; can_comm->transmit(b.set_id(can::CanId(0x300)).set_command(0x12).build());
-    is_homed_2 = true; is_homing_2_in_progress = false; Serial.println("Lift 2 Homed!");
-  }
-
-  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
-  delay(1);
-}
+void loop() { rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)); }
