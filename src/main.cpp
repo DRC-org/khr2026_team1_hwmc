@@ -6,16 +6,21 @@
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
-#include <robot_msgs/msg/robot_feedback.h>
-#include <std_msgs/msg/string.h>
+#include <robot_msgs/msg/hand_message.h>
 
 #include <can/core.hpp>
 
-// WiFi / micro-ROS agent の設定
-#define WIFI_SSID "your_ssid"
-#define WIFI_PASS "your_password"
-#define AGENT_IP IPAddress(192, 168, 1, 100)
-#define AGENT_PORT 8888
+TaskHandle_t MicroROSTaskHandle = NULL;
+TaskHandle_t ControlTaskHandle = NULL;
+SemaphoreHandle_t DataMutex = NULL;
+
+// 開発時に WiFi 接続する用
+#if (MICRO_ROS_TRANSPORT_ARDUINO_WIFI == 1)
+char ssid[] = "DRC";
+char psk[] = "28228455";
+IPAddress agent_ip(192, 168, 0, 101);
+size_t agent_port = 8888;
+#endif
 
 #define RCCHECK(fn)         \
   {                         \
@@ -30,6 +35,8 @@
     (void)rc;            \
   }
 
+can::CanCommunicator* can_comm;
+
 // micro-ROS オブジェクト
 rcl_publisher_t pub_feedback;
 rcl_subscription_t sub_control;
@@ -40,9 +47,8 @@ rcl_allocator_t allocator;
 rcl_node_t node;
 
 // メッセージバッファ
-robot_msgs__msg__RobotFeedback feedback_msg;
-std_msgs__msg__String control_msg;
-static char control_buf[512];
+robot_msgs__msg__HandMessage feedback_msg;
+robot_msgs__msg__HandMessage control_msg;
 
 void error_loop() {
   while (true) {
@@ -50,91 +56,108 @@ void error_loop() {
   }
 }
 
-// robot_control トピックのコールバック（JSON 文字列を受信）
-void on_control_command(const void* msg_in) {
-  const auto* cmd = static_cast<const std_msgs__msg__String*>(msg_in);
+// hand_control topic の callback
+IRAM_ATTR void on_control_command(const void* msg_in) {
+  const auto* cmd = static_cast<const robot_msgs__msg__HandMessage*>(msg_in);
 
-  JsonDocument doc;
-  DeserializationError err =
-      deserializeJson(doc, cmd->data.data, cmd->data.size);
-  if (err) return;
-
-  if (doc["m3508_rpms"].is<JsonObject>()) {
-    float fl = doc["m3508_rpms"]["fl"] | 0.0f;
-    float fr = doc["m3508_rpms"]["fr"] | 0.0f;
-    float rl = doc["m3508_rpms"]["rl"] | 0.0f;
-    float rr = doc["m3508_rpms"]["rr"] | 0.0f;
-    // TODO: CAN バスで各 M3508 に目標 RPM を送信
-    (void)fl;
-    (void)fr;
-    (void)rl;
-    (void)rr;
-  }
-
-  if (doc["pid_gains"].is<JsonObject>()) {
-    float kp = doc["pid_gains"]["kp"] | 0.5f;
-    float ki = doc["pid_gains"]["ki"] | 0.05f;
-    float kd = doc["pid_gains"]["kd"] | 0.0f;
-    // TODO: PID ゲインを更新
-    (void)kp;
-    (void)ki;
-    (void)kd;
-  }
+  // TODO: cmd をもとに CAN 通信する
 }
 
-// 100 ms ごとにフィードバックを送信するタイマーコールバック
-void timer_feedback_callback(rcl_timer_t* timer, int64_t /*last_call_time*/) {
+// 100 ms ごとにフィードバックを送信する
+IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
+                                       int64_t /*last_call_time*/) {
   if (timer == nullptr) return;
 
-  // TODO: CAN バスから実際の RPM を読み取り feedback_msg に格納する
-  // 例:
-  //   feedback_msg.m3508_rpms.fl = can_get_rpm(CAN_M3508_FL);
-  //   feedback_msg.m3508_rpms.fr = can_get_rpm(CAN_M3508_FR);
-  //   feedback_msg.m3508_rpms.rl = can_get_rpm(CAN_M3508_RL);
-  //   feedback_msg.m3508_rpms.rr = can_get_rpm(CAN_M3508_RR);
-
-  // TODO: 各機構の状態を取得して格納する
-  // 例:
-  //   feedback_msg.yagura_1.pos   = ROBOT_MSGS__MSG__YAGURA_MECHANISM__POS_UP;
-  //   feedback_msg.yagura_1.state =
-  //   ROBOT_MSGS__MSG__YAGURA_MECHANISM__STATE_OPEN;
+  // TODO: CAN で取得した値を入れる
 
   RCSOFTCHECK(rcl_publish(&pub_feedback, &feedback_msg, nullptr));
 }
 
-void setup() {
-  Serial.begin(115200);
-
-  // micro-ROS WiFi トランスポートの初期化（内部で WiFi 接続も行う）
-  set_microros_wifi_transports(WIFI_SSID, WIFI_PASS, AGENT_IP, AGENT_PORT);
+void setup_micro_ros() {
+#if (MICRO_ROS_TRANSPORT_ARDUINO_SERIAL == 1)
+  set_microros_serial_transports(Serial);
+#elif (MICRO_ROS_TRANSPORT_ARDUINO_WIFI == 1)
+  set_microros_wifi_transports(ssid, psk, agent_ip, agent_port);
+#endif
 
   allocator = rcl_get_default_allocator();
   RCCHECK(rclc_support_init(&support, 0, nullptr, &allocator));
   RCCHECK(rclc_node_init_default(&node, "hwmc_node", "", &support));
 
-  // Publisher: robot_feedback (RobotFeedback 型)
+  // Publisher: hand_feedback (HandMessage 型)
   RCCHECK(rclc_publisher_init_default(
       &pub_feedback, &node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(robot_msgs, msg, RobotFeedback),
-      "robot_feedback"));
+      ROSIDL_GET_MSG_TYPE_SUPPORT(robot_msgs, msg, HandMessage),
+      "hand_feedback"));
 
-  // Subscriber: robot_control (String 型, JSON)
-  control_msg.data.data = control_buf;
-  control_msg.data.size = 0;
-  control_msg.data.capacity = sizeof(control_buf);
+  // Subscriber: hand_control (HandMessage 型)
   RCCHECK(rclc_subscription_init_default(
-      &sub_control, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-      "robot_control"));
+      &sub_control, &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(robot_msgs, msg, HandMessage),
+      "hand_control"));
 
-  // タイマー: 100 ms ごとにフィードバック送信
-  RCCHECK(rclc_timer_init_default(&timer_feedback, &support, RCL_MS_TO_NS(100),
+  // Timer: 50 ms ごとにフィードバック送信
+  RCCHECK(rclc_timer_init_default(&timer_feedback, &support, RCL_MS_TO_NS(50),
                                   timer_feedback_callback));
 
-  // エグゼキュータ: サブスクライバ 1 + タイマー 1
+  // Message の初期化
+  robot_msgs__msg__HandMessage__init(&control_msg);
+  robot_msgs__msg__HandMessage__init(&feedback_msg);
+
+  // Executor: Sub 1 + Timer 1
   RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_control, &control_msg,
                                          &on_control_command, ON_NEW_DATA));
   RCCHECK(rclc_executor_add_timer(&executor, &timer_feedback));
 }
 
-void loop() { rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)); }
+// Control Task: Core 1, 最高優先度
+void ControlTask(void* pvParameters) {
+  TickType_t xLastWakeTime;
+  const TickType_t xFrequency = pdMS_TO_TICKS(3);
+  xLastWakeTime = xTaskGetTickCount();
+
+  while (1) {
+    // CAN 受信処理（キューを 1 つずつ処理）
+    can_comm->process_received_messages();
+
+    // TODO: いろいろやる
+
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+// Micro-ROS Task: Core 0, 標準優先度
+void MicroROSTask(void* pvParameters) {
+  setup_micro_ros();
+
+  while (1) {
+    // タイムアウト 10ms でタスク切り替えの余地を与える
+    rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+    vTaskDelay(10);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  DataMutex = xSemaphoreCreateMutex();
+
+  // CAN 通信の初期化（フィルタなし = 全受信）
+  can_comm = new can::CanCommunicator();
+  can_comm->setup();
+  Serial.println("CAN setup complete");
+
+  // Core 1 (Application Core) で制御タスクを実行
+  xTaskCreatePinnedToCore(ControlTask, "ControlTask", 4096, NULL,
+                          configMAX_PRIORITIES - 1, &ControlTaskHandle, 1);
+
+  // Core 0 (Protocol Core) で Micro-ROS を実行（Wi-Fi も Core 0
+  // で処理されるため）
+  xTaskCreatePinnedToCore(MicroROSTask, "MicroROSTask", 8192, NULL, 2,
+                          &MicroROSTaskHandle, 0);
+
+  Serial.println("Tasks started");
+}
+
+void loop() { vTaskDelay(portMAX_DELAY); }
