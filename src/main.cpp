@@ -23,17 +23,21 @@ IPAddress agent_ip(192, 168, 0, 101);
 size_t agent_port = 8888;
 #endif
 
-#define RCCHECK(fn)         \
-  {                         \
-    rcl_ret_t rc = (fn);    \
-    if (rc != RCL_RET_OK) { \
-      error_loop();         \
-    }                       \
+#define RCCHECK(fn)                \
+  {                                \
+    rcl_ret_t temp_rc = fn;        \
+    if ((temp_rc != RCL_RET_OK)) { \
+      error_loop();                \
+    }                              \
   }
-#define RCSOFTCHECK(fn)  \
-  {                      \
-    rcl_ret_t rc = (fn); \
-    (void)rc;            \
+
+#define RCSOFTCHECK(fn)             \
+  {                                 \
+    rcl_ret_t temp_rc = fn;         \
+    if ((temp_rc != RCL_RET_OK)) {  \
+      Serial.print("Soft error: "); \
+      Serial.println(temp_rc);      \
+    }                               \
   }
 
 can::CanCommunicator* can_comm;
@@ -72,7 +76,8 @@ MechanismStates current{};  // 現在値
 
 void error_loop() {
   while (true) {
-    delay(100);
+    Serial.println("An error occurred in micro-ROS!");
+    delay(5000);
   }
 }
 
@@ -201,7 +206,7 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
   }
 }
 
-// 100 ms ごとにフィードバックを送信する
+// 50 ms ごとにフィードバックを送信する
 IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
                                        int64_t /*last_call_time*/) {
   if (timer == nullptr) return;
