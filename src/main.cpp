@@ -441,6 +441,8 @@ void MicroROSTask(void* pvParameters) {
 void setup() {
   Serial.begin(115200);
 
+  WiFi.setSleep(false);  // WiFi 省電力モードをオフ
+
   DataMutex = xSemaphoreCreateMutex();
 
   // CAN 通信の初期化（フィルタなし = 全受信）
