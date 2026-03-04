@@ -78,29 +78,73 @@ void register_can_event_handlers() {
         // Mutex を使うと Core 0 の micro-ROS タスクとの競合で
         // フィードバックがドロップされるため、ここでは使わない。
         switch (identifier) {
-          case 0x30:
+          case 0x30:  // 昇降 1 動作完了
+            current.yagura_1.pos =
+                (target == 0x00)
+                    ? robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE
+                    : robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+            break;
+          case 0x31:  // 昇降 2 動作完了
+            current.yagura_2.pos =
+                (target == 0x00)
+                    ? robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE
+                    : robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+            break;
+          case 0x40:  // 櫓ハンド 1 動作完了
+            current.yagura_1.state =
+                (target == 0x00)
+                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            break;
+          case 0x41:  // 櫓ハンド 2 動作完了
+            current.yagura_2.state =
+                (target == 0x00)
+                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            break;
+          case 0x4A:  // リングハンド 1 移動完了
             switch (target) {
               case 0x00:
-                current.yagura_1.pos =
-                    robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE;
+                current.ring_1.pos =
+                    robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
                 break;
               case 0x01:
-                current.yagura_1.pos =
-                    robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+                current.ring_1.pos =
+                    robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
+                break;
+              case 0x02:
+                current.ring_1.pos =
+                    robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
                 break;
             }
             break;
-          case 0x40:
+          case 0x4B:  // リングハンド 1 開閉完了
+            current.ring_1.state =
+                (target == 0x00)
+                    ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+            break;
+          case 0x4C:  // リングハンド 2 移動完了
             switch (target) {
               case 0x00:
-                current.yagura_2.state =
-                    robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE;
+                current.ring_2.pos =
+                    robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
                 break;
               case 0x01:
-                current.yagura_2.state =
-                    robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+                current.ring_2.pos =
+                    robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
+                break;
+              case 0x02:
+                current.ring_2.pos =
+                    robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
                 break;
             }
+            break;
+          case 0x4D:  // リングハンド 2 開閉完了
+            current.ring_2.state =
+                (target == 0x00)
+                    ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
             break;
         }
       });
@@ -125,6 +169,8 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
     const ActuatorState& tgt = (i == 0) ? target.yagura_1 : target.yagura_2;
     const ActuatorState& cur = (i == 0) ? current.yagura_1 : current.yagura_2;
 
+    ActuatorState& cur_mut = (i == 0) ? current.yagura_1 : current.yagura_2;
+
     if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_UP &&
         cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP &&
         cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP_DONE) {
@@ -132,9 +178,7 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_dest(can::CanDest::dc_lift)
                              .set_command((i == 0) ? 0x01 : 0x11)
                              .build());
-      if (i == 0) {
-        current.yagura_1.pos = robot_msgs__msg__YaguraMechanism__POS_UP;
-      }
+      cur_mut.pos = robot_msgs__msg__YaguraMechanism__POS_UP;
     } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_DOWN &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE) {
@@ -142,18 +186,14 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_dest(can::CanDest::dc_lift)
                              .set_command((i == 0) ? 0x00 : 0x10)
                              .build());
-      if (i == 0) {
-        current.yagura_1.pos = robot_msgs__msg__YaguraMechanism__POS_DOWN;
-      }
+      cur_mut.pos = robot_msgs__msg__YaguraMechanism__POS_DOWN;
     } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
                              .set_dest(can::CanDest::dc_lift)
                              .set_command((i == 0) ? 0x02 : 0x12)
                              .build());
-      if (i == 0) {
-        current.yagura_1.pos = robot_msgs__msg__YaguraMechanism__POS_STOPPED;
-      }
+      cur_mut.pos = robot_msgs__msg__YaguraMechanism__POS_STOPPED;
     }
 
     if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_OPEN &&
@@ -163,10 +203,7 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_dest(can::CanDest::servo_yagura)
                              .set_command((i == 0) ? 0x01 : 0x11)
                              .build());
-      if (i == 0) {
-        Serial.println("OPEN");
-        current.yagura_1.state = robot_msgs__msg__YaguraMechanism__STATE_OPEN;
-      }
+      cur_mut.state = robot_msgs__msg__YaguraMechanism__STATE_OPEN;
     } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
                cur.state !=
@@ -175,27 +212,22 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_dest(can::CanDest::servo_yagura)
                              .set_command((i == 0) ? 0x00 : 0x10)
                              .build());
-      if (i == 0) {
-        Serial.println("CLOSE");
-        current.yagura_1.state = robot_msgs__msg__YaguraMechanism__STATE_CLOSE;
-      }
+      cur_mut.state = robot_msgs__msg__YaguraMechanism__STATE_CLOSE;
     } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_STOPPED &&
                cur.state != robot_msgs__msg__YaguraMechanism__STATE_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
                              .set_dest(can::CanDest::servo_yagura)
                              .set_command((i == 0) ? 0x02 : 0x12)
                              .build());
-      if (i == 0) {
-        Serial.println("STOPPED");
-        current.yagura_1.state =
-            robot_msgs__msg__YaguraMechanism__STATE_STOPPED;
-      }
+      cur_mut.state = robot_msgs__msg__YaguraMechanism__STATE_STOPPED;
     }
   }
 
   for (int i = 0; i < 2; i++) {
     const ActuatorState& tgt = (i == 0) ? target.ring_1 : target.ring_2;
     const ActuatorState& cur = (i == 0) ? current.ring_1 : current.ring_2;
+
+    ActuatorState& cur_mut = (i == 0) ? current.ring_1 : current.ring_2;
 
     if (tgt.pos == robot_msgs__msg__RingMechanism__POS_PICKUP &&
         cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP &&
@@ -205,6 +237,7 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_command((i == 0) ? 0x00 : 0x20)
                              .set_value(0x00)
                              .build());
+      cur_mut.pos = robot_msgs__msg__RingMechanism__POS_PICKUP;
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_YAGURA &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA_DONE) {
@@ -213,6 +246,7 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_command((i == 0) ? 0x00 : 0x20)
                              .set_value(0x01)
                              .build());
+      cur_mut.pos = robot_msgs__msg__RingMechanism__POS_YAGURA;
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_HONMARU &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU_DONE) {
@@ -221,12 +255,14 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_command((i == 0) ? 0x00 : 0x20)
                              .set_value(0x02)
                              .build());
+      cur_mut.pos = robot_msgs__msg__RingMechanism__POS_HONMARU;
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
                              .set_dest(can::CanDest::servo_ring)
                              .set_command((i == 0) ? 0x01 : 0x21)
                              .build());
+      cur_mut.pos = robot_msgs__msg__RingMechanism__POS_STOPPED;
     }
 
     if (tgt.state == robot_msgs__msg__RingMechanism__STATE_OPEN &&
@@ -236,6 +272,7 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_dest(can::CanDest::servo_ring)
                              .set_command((i == 0) ? 0x11 : 0x31)
                              .build());
+      cur_mut.state = robot_msgs__msg__RingMechanism__STATE_OPEN;
     } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE) {
@@ -243,12 +280,14 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_dest(can::CanDest::servo_ring)
                              .set_command((i == 0) ? 0x10 : 0x30)
                              .build());
+      cur_mut.state = robot_msgs__msg__RingMechanism__STATE_CLOSE;
     } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_STOPPED &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
                              .set_dest(can::CanDest::servo_ring)
                              .set_command((i == 0) ? 0x12 : 0x32)
                              .build());
+      cur_mut.state = robot_msgs__msg__RingMechanism__STATE_STOPPED;
     }
   }
 }
