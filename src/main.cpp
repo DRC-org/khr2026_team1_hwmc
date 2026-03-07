@@ -90,41 +90,45 @@ void register_can_event_handlers() {
                     ? robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE
                     : robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
             break;
-          case 0x40:  // 櫓ハンド 1 動作完了
-            current.yagura_1.state =
-                (target == 0x00)
-                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
-            break;
-          case 0x41:  // 櫓ハンド 2 動作完了
-            current.yagura_2.state =
-                (target == 0x00)
-                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
-            break;
-          case 0x4A:  // リングハンド 1 移動完了
-            switch (target) {
-              case 0x00:
-                current.ring_1.pos =
-                    robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
-                break;
-              case 0x01:
-                current.ring_1.pos =
-                    robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
-                break;
-              case 0x02:
-                current.ring_1.pos =
-                    robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
-                break;
-            }
-            break;
-          case 0x4B:  // リングハンド 1 開閉完了
+          case 0x40:  // リングハンド 1 動作完了（開閉）
             current.ring_1.state =
                 (target == 0x00)
                     ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
                     : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
             break;
-          case 0x4C:  // リングハンド 2 移動完了
+          case 0x41:  // リングハンド 1 移動完了（位置）
+            switch (target) {
+              case 0x00:
+                current.ring_1.pos =
+                    robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
+                break;
+              case 0x01:
+                current.ring_1.pos =
+                    robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
+                break;
+              case 0x02:
+                current.ring_1.pos =
+                    robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
+                break;
+            }
+            break;
+          case 0x42:  // リングハンド 1 把持失敗
+            current.ring_1.state =
+                robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL;
+            break;
+          case 0x43:  // 櫓ハンド 1 動作完了
+            current.yagura_1.state =
+                (target == 0x00)
+                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            break;
+          case 0x4A:  // リングハンド 2 動作完了（開閉）
+            current.ring_2.state =
+                (target == 0x00)
+                    ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+            break;
+          case 0x4B:  // リングハンド 2 移動完了（位置）
             switch (target) {
               case 0x00:
                 current.ring_2.pos =
@@ -140,11 +144,15 @@ void register_can_event_handlers() {
                 break;
             }
             break;
-          case 0x4D:  // リングハンド 2 開閉完了
+          case 0x4C:  // リングハンド 2 把持失敗
             current.ring_2.state =
+                robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL;
+            break;
+          case 0x4D:  // 櫓ハンド 2 動作完了
+            current.yagura_2.state =
                 (target == 0x00)
-                    ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
+                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
             break;
         }
       });
