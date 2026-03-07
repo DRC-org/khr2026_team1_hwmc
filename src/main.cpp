@@ -179,27 +179,30 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
 
     ActuatorState& cur_mut = (i == 0) ? current.yagura_1 : current.yagura_2;
 
+    auto dc_dest = (i == 0) ? can::CanDest::dc_lift_front : can::CanDest::dc_lift_rear;
+    auto sv_dest = (i == 0) ? can::CanDest::servo_front : can::CanDest::servo_rear;
+
     if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_UP &&
         cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP &&
         cur.pos != robot_msgs__msg__YaguraMechanism__POS_UP_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::dc_lift)
-                             .set_command((i == 0) ? 0x01 : 0x11)
+                             .set_dest(dc_dest)
+                             .set_command(0x01)
                              .build());
       cur_mut.pos = robot_msgs__msg__YaguraMechanism__POS_UP;
     } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_DOWN &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::dc_lift)
-                             .set_command((i == 0) ? 0x00 : 0x10)
+                             .set_dest(dc_dest)
+                             .set_command(0x00)
                              .build());
       cur_mut.pos = robot_msgs__msg__YaguraMechanism__POS_DOWN;
     } else if (tgt.pos == robot_msgs__msg__YaguraMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__YaguraMechanism__POS_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::dc_lift)
-                             .set_command((i == 0) ? 0x02 : 0x12)
+                             .set_dest(dc_dest)
+                             .set_command(0x02)
                              .build());
       cur_mut.pos = robot_msgs__msg__YaguraMechanism__POS_STOPPED;
     }
@@ -208,8 +211,8 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
         cur.state != robot_msgs__msg__YaguraMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_yagura)
-                             .set_command((i == 0) ? 0x01 : 0x11)
+                             .set_dest(sv_dest)
+                             .set_command(0x21)
                              .build());
       cur_mut.state = robot_msgs__msg__YaguraMechanism__STATE_OPEN;
     } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_CLOSE &&
@@ -217,15 +220,15 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                cur.state !=
                    robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_yagura)
-                             .set_command((i == 0) ? 0x00 : 0x10)
+                             .set_dest(sv_dest)
+                             .set_command(0x20)
                              .build());
       cur_mut.state = robot_msgs__msg__YaguraMechanism__STATE_CLOSE;
     } else if (tgt.state == robot_msgs__msg__YaguraMechanism__STATE_STOPPED &&
                cur.state != robot_msgs__msg__YaguraMechanism__STATE_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_yagura)
-                             .set_command((i == 0) ? 0x02 : 0x12)
+                             .set_dest(sv_dest)
+                             .set_command(0x22)
                              .build());
       cur_mut.state = robot_msgs__msg__YaguraMechanism__STATE_STOPPED;
     }
@@ -237,12 +240,14 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
 
     ActuatorState& cur_mut = (i == 0) ? current.ring_1 : current.ring_2;
 
+    auto sv_dest = (i == 0) ? can::CanDest::servo_front : can::CanDest::servo_rear;
+
     if (tgt.pos == robot_msgs__msg__RingMechanism__POS_PICKUP &&
         cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP &&
         cur.pos != robot_msgs__msg__RingMechanism__POS_PICKUP_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x00 : 0x20)
+                             .set_dest(sv_dest)
+                             .set_command(0x00)
                              .set_value(0x00)
                              .build());
       cur_mut.pos = robot_msgs__msg__RingMechanism__POS_PICKUP;
@@ -250,8 +255,8 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_YAGURA_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x00 : 0x20)
+                             .set_dest(sv_dest)
+                             .set_command(0x00)
                              .set_value(0x01)
                              .build());
       cur_mut.pos = robot_msgs__msg__RingMechanism__POS_YAGURA;
@@ -259,16 +264,16 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_HONMARU_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x00 : 0x20)
+                             .set_dest(sv_dest)
+                             .set_command(0x00)
                              .set_value(0x02)
                              .build());
       cur_mut.pos = robot_msgs__msg__RingMechanism__POS_HONMARU;
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x01 : 0x21)
+                             .set_dest(sv_dest)
+                             .set_command(0x01)
                              .build());
       cur_mut.pos = robot_msgs__msg__RingMechanism__POS_STOPPED;
     }
@@ -277,23 +282,23 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
         cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x11 : 0x31)
+                             .set_dest(sv_dest)
+                             .set_command(0x11)
                              .build());
       cur_mut.state = robot_msgs__msg__RingMechanism__STATE_OPEN;
     } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x10 : 0x30)
+                             .set_dest(sv_dest)
+                             .set_command(0x10)
                              .build());
       cur_mut.state = robot_msgs__msg__RingMechanism__STATE_CLOSE;
     } else if (tgt.state == robot_msgs__msg__RingMechanism__STATE_STOPPED &&
                cur.state != robot_msgs__msg__RingMechanism__STATE_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
-                             .set_dest(can::CanDest::servo_ring)
-                             .set_command((i == 0) ? 0x12 : 0x32)
+                             .set_dest(sv_dest)
+                             .set_command(0x12)
                              .build());
       cur_mut.state = robot_msgs__msg__RingMechanism__STATE_STOPPED;
     }

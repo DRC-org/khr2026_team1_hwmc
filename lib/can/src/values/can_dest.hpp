@@ -10,9 +10,10 @@ enum class CanDest : can::CanId {
   // CAN 1: Mechanism System
   central_mech = 0x000,
   power_12v = 0x100,
-  dc_lift = 0x300,
-  servo_yagura = 0x400,
-  servo_ring = 0x401,
+  dc_lift_front = 0x300,  // DC モータ制御基板（前）: 昇降 1
+  dc_lift_rear = 0x301,   // DC モータ制御基板（後）: 昇降 2
+  servo_front = 0x400,    // サーボ制御基板（前）: ring_1 + yagura_1
+  servo_rear = 0x401,     // サーボ制御基板（後）: ring_2 + yagura_2
 
   // CAN 2: Drive System
   central_drive = 0x001,
