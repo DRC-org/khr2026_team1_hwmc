@@ -56,8 +56,8 @@ struct ActuatorState {
 };
 
 struct MechanismStates {
-  ActuatorState yagura_1 = {2, 4};
-  ActuatorState yagura_2 = {2, 4};
+  ActuatorState yagura_1 = {2, 2};
+  ActuatorState yagura_2 = {2, 2};
   ActuatorState ring_1 = {3, 2};
   ActuatorState ring_2 = {3, 2};
 };
