@@ -500,6 +500,7 @@ void setup() {
   // CAN 通信の初期化（フィルタなし = 全受信）
   can_comm = new can::CanCommunicator();
   can_comm->setup();
+  register_can_event_handlers();
 #if (MICRO_ROS_TRANSPORT_ARDUINO_SERIAL != 1)
   Serial.println("CAN setup complete");
 #endif
