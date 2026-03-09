@@ -114,8 +114,14 @@ void register_can_event_handlers() {
             }
             break;
           case 0x42:  // リングハンド 1 把持失敗
-            current.ring_1.state =
-                robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL;
+            // OPEN/OPEN_DONE 中は上書きしない（OPEN コマンド送信後の遅延 GRIP_FAIL を無視）
+            if (current.ring_1.state !=
+                    robot_msgs__msg__RingMechanism__STATE_OPEN &&
+                current.ring_1.state !=
+                    robot_msgs__msg__RingMechanism__STATE_OPEN_DONE) {
+              current.ring_1.state =
+                  robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL;
+            }
             break;
           case 0x43:  // 櫓ハンド 1 動作完了
             current.yagura_1.state =
@@ -146,8 +152,14 @@ void register_can_event_handlers() {
             }
             break;
           case 0x4C:  // リングハンド 2 把持失敗
-            current.ring_2.state =
-                robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL;
+            // OPEN/OPEN_DONE 中は上書きしない（OPEN コマンド送信後の遅延 GRIP_FAIL を無視）
+            if (current.ring_2.state !=
+                    robot_msgs__msg__RingMechanism__STATE_OPEN &&
+                current.ring_2.state !=
+                    robot_msgs__msg__RingMechanism__STATE_OPEN_DONE) {
+              current.ring_2.state =
+                  robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL;
+            }
             break;
           case 0x4D:  // 櫓ハンド 2 動作完了
             current.yagura_2.state =
