@@ -19,9 +19,9 @@ SemaphoreHandle_t DataMutex = NULL;
 // 開発時に WiFi 接続する用
 #if (MICRO_ROS_TRANSPORT_ARDUINO_WIFI == 1)
 char ssid[] = "DRC";
-char psk[] = "28228455";
-IPAddress agent_ip(192, 168, 0, 101);
-size_t agent_port = 8888;
+char psk[] = "kumachan";
+IPAddress agent_ip(192, 168, 1, 103);
+size_t agent_port = 8889;
 #endif
 
 #define RCSOFTCHECK(fn)            \
