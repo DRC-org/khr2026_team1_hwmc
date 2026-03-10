@@ -9,6 +9,8 @@
 #include <rclc/rclc.h>
 #include <robot_msgs/msg/hand_message.h>
 
+#include <std_msgs/msg/bool.h>
+
 #include <can/core.hpp>
 #include <can/peripheral.hpp>
 
@@ -46,6 +48,13 @@ rcl_node_t node;
 // メッセージバッファ
 robot_msgs__msg__HandMessage feedback_msg;
 robot_msgs__msg__HandMessage control_msg;
+
+// 動的ヘルスチェック
+rcl_subscription_t sub_health_check;
+std_msgs__msg__Bool hc_control_msg;
+volatile bool hc_active = false;
+volatile uint8_t hc_step = 0;
+volatile uint32_t hc_time = 0;
 
 // 各アクチュエータの状態
 struct ActuatorState {
@@ -173,6 +182,8 @@ void register_can_event_handlers() {
 
 // hand_control topic の callback
 IRAM_ATTR void on_control_command(const void* msg_in) {
+  if (hc_active) return;  // ヘルスチェック中は通常コマンドを無視
+
   const auto* cmd = static_cast<const robot_msgs__msg__HandMessage*>(msg_in);
 
   if (xSemaphoreTake(DataMutex, portMAX_DELAY) == pdTRUE) {
@@ -319,6 +330,16 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
   }
 }
 
+// health_check topic の callback
+IRAM_ATTR void on_health_check_command(const void* msg_in) {
+  const auto* cmd = static_cast<const std_msgs__msg__Bool*>(msg_in);
+  if (cmd->data && !hc_active) {
+    hc_active = true;
+    hc_step   = 1;
+    hc_time   = (uint32_t)millis();
+  }
+}
+
 // 50 ms ごとにフィードバックを送信する
 IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
                                        int64_t /*last_call_time*/) {
@@ -393,14 +414,21 @@ static bool create_entities() {
           "hand_control") != RCL_RET_OK)
     return false;
 
+  if (rclc_subscription_init_default(
+          &sub_health_check, &node,
+          ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+          "health_check") != RCL_RET_OK)
+    return false;
+
   if (rclc_timer_init_default(&timer_feedback, &support, RCL_MS_TO_NS(50),
                               timer_feedback_callback) != RCL_RET_OK)
     return false;
 
   robot_msgs__msg__HandMessage__init(&control_msg);
   robot_msgs__msg__HandMessage__init(&feedback_msg);
+  std_msgs__msg__Bool__init(&hc_control_msg);
 
-  if (rclc_executor_init(&executor, &support.context, 2, &allocator) !=
+  if (rclc_executor_init(&executor, &support.context, 3, &allocator) !=
       RCL_RET_OK)
     return false;
   if (rclc_executor_add_subscription(&executor, &sub_control, &control_msg,
@@ -408,6 +436,10 @@ static bool create_entities() {
                                      ON_NEW_DATA) != RCL_RET_OK)
     return false;
   if (rclc_executor_add_timer(&executor, &timer_feedback) != RCL_RET_OK)
+    return false;
+  if (rclc_executor_add_subscription(&executor, &sub_health_check,
+                                     &hc_control_msg, &on_health_check_command,
+                                     ON_NEW_DATA) != RCL_RET_OK)
     return false;
 
   return true;
@@ -420,12 +452,14 @@ static void destroy_entities() {
   rclc_executor_fini(&executor);
   rcl_timer_fini(&timer_feedback);
   rcl_subscription_fini(&sub_control, &node);
+  rcl_subscription_fini(&sub_health_check, &node);
   rcl_publisher_fini(&pub_feedback, &node);
   rcl_node_fini(&node);
   rclc_support_fini(&support);
 
   robot_msgs__msg__HandMessage__fini(&control_msg);
   robot_msgs__msg__HandMessage__fini(&feedback_msg);
+  std_msgs__msg__Bool__fini(&hc_control_msg);
 }
 
 // Control Task: Core 1, 最高優先度
@@ -438,7 +472,68 @@ void ControlTask(void* pvParameters) {
     // CAN 受信処理（キューを 1 つずつ処理）
     can_comm->process_received_messages();
 
-    // TODO: いろいろやる
+    // 動的ヘルスチェック状態機械
+    if (hc_active) {
+      uint32_t now_ms = (uint32_t)millis();
+      uint32_t elapsed = now_ms - hc_time;
+      switch (hc_step) {
+        case 1:  // リングハンド 閉じる
+          for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear}) {
+            can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x10).build());
+          }
+          hc_step = 2; hc_time = now_ms;
+          break;
+        case 2:  // 500ms後: リングハンド 開く
+          if (elapsed >= 500) {
+            for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear}) {
+              can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x11).build());
+            }
+            hc_step = 3; hc_time = now_ms;
+          }
+          break;
+        case 3:  // 500ms後: 櫓ハンド 閉じる
+          if (elapsed >= 500) {
+            for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear}) {
+              can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x20).build());
+            }
+            hc_step = 4; hc_time = now_ms;
+          }
+          break;
+        case 4:  // 1500ms後: 櫓ハンド 開く
+          if (elapsed >= 1500) {
+            for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear}) {
+              can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x21).build());
+            }
+            hc_step = 5; hc_time = now_ms;
+          }
+          break;
+        case 5:  // 1500ms後: リフト 上げる
+          if (elapsed >= 1500) {
+            for (auto dest : {can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear}) {
+              can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x01).build());
+            }
+            hc_step = 6; hc_time = now_ms;
+          }
+          break;
+        case 6:  // 1200ms後: リフト 下げる
+          if (elapsed >= 1200) {
+            for (auto dest : {can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear}) {
+              can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x00).build());
+            }
+            hc_step = 7; hc_time = now_ms;
+          }
+          break;
+        case 7:  // 1200ms後: リフト 停止 → 完了
+          if (elapsed >= 1200) {
+            for (auto dest : {can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear}) {
+              can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x02).build());
+            }
+            hc_active = false; hc_step = 0;
+          }
+          break;
+        default: break;
+      }
+    }
 
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
