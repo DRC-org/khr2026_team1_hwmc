@@ -293,7 +293,8 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
 
     if (tgt.state == robot_msgs__msg__RingMechanism__STATE_OPEN &&
         cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN &&
-        cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN_DONE) {
+        cur.state != robot_msgs__msg__RingMechanism__STATE_OPEN_DONE &&
+        cur.state != robot_msgs__msg__RingMechanism__STATE_GRIP_FAIL) {
       can_comm->transmit(can::CanTxMessageBuilder()
                              .set_dest(sv_dest)
                              .set_command(0x11)
