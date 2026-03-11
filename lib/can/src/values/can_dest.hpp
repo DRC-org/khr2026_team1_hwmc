@@ -12,6 +12,7 @@ enum class CanDest : can::CanId {
   power_12v = 0x100,
   dc_lift_front = 0x300,  // DC モータ制御基板（前）: 昇降 1
   dc_lift_rear = 0x301,   // DC モータ制御基板（後）: 昇降 2
+  crab_led = 0x302,       // カニ機構LED制御基板
   servo_front = 0x400,    // サーボ制御基板（前）: ring_1 + yagura_1
   servo_rear = 0x401,     // サーボ制御基板（後）: ring_2 + yagura_2
 

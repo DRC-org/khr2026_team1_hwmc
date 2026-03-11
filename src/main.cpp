@@ -86,11 +86,17 @@ struct ActuatorState {
   uint8_t state;  // OPEN=0,CLOSE=1,STOPPED=2,OPEN_DONE=3,CLOSE_DONE=4
 };
 
+struct CrabLedState {
+  bool vgoal_led = false;
+  bool error_led = false;
+};
+
 struct MechanismStates {
   ActuatorState yagura_1 = {2, 2};
   ActuatorState yagura_2 = {2, 2};
   ActuatorState ring_1 = {3, 2};
   ActuatorState ring_2 = {3, 2};
+  CrabLedState crab = {};
 };
 
 MechanismStates target{};   // 目標値
@@ -286,8 +292,25 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
     target.yagura_2 = {cmd->yagura_2.pos, cmd->yagura_2.state};
     target.ring_1 = {cmd->ring_1.pos, cmd->ring_1.state};
     target.ring_2 = {cmd->ring_2.pos, cmd->ring_2.state};
+    target.crab = {cmd->crab.vgoal_led, cmd->crab.error_led};
 
     xSemaphoreGive(DataMutex);
+  }
+
+  // カニ機構LED: 状態が変わったときだけCAN送信
+  if (target.crab.vgoal_led != current.crab.vgoal_led) {
+    can_comm->transmit(can::CanTxMessageBuilder()
+                           .set_dest(can::CanDest::crab_led)
+                           .set_command(target.crab.vgoal_led ? 0x01 : 0x00)
+                           .build());
+    current.crab.vgoal_led = target.crab.vgoal_led;
+  }
+  if (target.crab.error_led != current.crab.error_led) {
+    can_comm->transmit(can::CanTxMessageBuilder()
+                           .set_dest(can::CanDest::crab_led)
+                           .set_command(target.crab.error_led ? 0x11 : 0x10)
+                           .build());
+    current.crab.error_led = target.crab.error_led;
   }
 
   // TODO: CanTxMessageBuilder の仕様が今年と異なるので修正する
@@ -445,6 +468,8 @@ IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
     feedback_msg.yagura_2 = {current.yagura_2.pos, current.yagura_2.state};
     feedback_msg.ring_1 = {current.ring_1.pos, current.ring_1.state};
     feedback_msg.ring_2 = {current.ring_2.pos, current.ring_2.state};
+    feedback_msg.crab.vgoal_led = current.crab.vgoal_led;
+    feedback_msg.crab.error_led = current.crab.error_led;
     feedback_msg.servo_front_alive = servo_health[0].alive;
     feedback_msg.servo_rear_alive = servo_health[1].alive;
     feedback_msg.dc_lift_front_alive = dc_lift_health[0].alive;
