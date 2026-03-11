@@ -66,6 +66,13 @@ struct ServoHealthState {
 };
 
 ServoHealthState servo_health[2];  // [0]=front(0x400), [1]=rear(0x401)
+
+struct DcLiftHealthState {
+  volatile bool alive = false;
+  volatile uint32_t last_response_ms = 0;
+};
+
+DcLiftHealthState dc_lift_health[2];  // [0]=front(0x300), [1]=rear(0x301)
 uint32_t last_health_request_ms = 0;
 constexpr uint32_t HEALTH_REQUEST_INTERVAL_MS = 1000;
 constexpr uint32_t HEALTH_TIMEOUT_MS = 2000;
@@ -254,6 +261,16 @@ void register_can_event_handlers() {
             servo_health[1].touch_sensor = data[3];
             break;
           }
+          case 0x3A: {  // DC リフト front ヘルスチェック応答
+            dc_lift_health[0].alive = true;
+            dc_lift_health[0].last_response_ms = (uint32_t)millis();
+            break;
+          }
+          case 0x3B: {  // DC リフト rear ヘルスチェック応答
+            dc_lift_health[1].alive = true;
+            dc_lift_health[1].last_response_ms = (uint32_t)millis();
+            break;
+          }
         }
       });
 }
@@ -430,6 +447,8 @@ IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
     feedback_msg.ring_2 = {current.ring_2.pos, current.ring_2.state};
     feedback_msg.servo_front_alive = servo_health[0].alive;
     feedback_msg.servo_rear_alive = servo_health[1].alive;
+    feedback_msg.dc_lift_front_alive = dc_lift_health[0].alive;
+    feedback_msg.dc_lift_rear_alive = dc_lift_health[1].alive;
 
     xSemaphoreGive(DataMutex);
   }
@@ -557,14 +576,15 @@ void ControlTask(void* pvParameters) {
       uint32_t now_ms = (uint32_t)millis();
       if (now_ms - last_health_request_ms >= HEALTH_REQUEST_INTERVAL_MS) {
         last_health_request_ms = now_ms;
-        for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear}) {
+        for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear,
+                          can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear}) {
           can_comm->transmit(can::CanTxMessageBuilder()
                                  .set_dest(dest)
                                  .set_command(0xFF)
                                  .build());
         }
-        // タイムアウト判定
-        const char* names[] = {"front", "rear"};
+        // サーボ基板タイムアウト判定
+        const char* servo_names[] = {"front", "rear"};
         for (int i = 0; i < 2; i++) {
           bool was_alive = servo_health[i].alive;
           if (servo_health[i].last_response_ms != 0 &&
@@ -573,9 +593,25 @@ void ControlTask(void* pvParameters) {
           }
 #if (MICRO_ROS_TRANSPORT_ARDUINO_SERIAL != 1)
           if (was_alive && !servo_health[i].alive) {
-            Serial.printf("servo %s: timeout\n", names[i]);
+            Serial.printf("servo %s: timeout\n", servo_names[i]);
           } else if (!was_alive && servo_health[i].alive) {
-            Serial.printf("servo %s: alive\n", names[i]);
+            Serial.printf("servo %s: alive\n", servo_names[i]);
+          }
+#endif
+        }
+        // DC リフト基板タイムアウト判定
+        const char* dc_names[] = {"front", "rear"};
+        for (int i = 0; i < 2; i++) {
+          bool was_alive = dc_lift_health[i].alive;
+          if (dc_lift_health[i].last_response_ms != 0 &&
+              now_ms - dc_lift_health[i].last_response_ms >= HEALTH_TIMEOUT_MS) {
+            dc_lift_health[i].alive = false;
+          }
+#if (MICRO_ROS_TRANSPORT_ARDUINO_SERIAL != 1)
+          if (was_alive && !dc_lift_health[i].alive) {
+            Serial.printf("dc_lift %s: timeout\n", dc_names[i]);
+          } else if (!was_alive && dc_lift_health[i].alive) {
+            Serial.printf("dc_lift %s: alive\n", dc_names[i]);
           }
 #endif
         }
