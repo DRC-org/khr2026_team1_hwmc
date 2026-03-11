@@ -73,6 +73,14 @@ struct DcLiftHealthState {
 };
 
 DcLiftHealthState dc_lift_health[2];  // [0]=front(0x300), [1]=rear(0x301)
+
+struct CrabHealthState {
+  volatile bool alive = false;
+  volatile uint32_t last_response_ms = 0;
+};
+
+CrabHealthState crab_health;
+
 uint32_t last_health_request_ms = 0;
 constexpr uint32_t HEALTH_REQUEST_INTERVAL_MS = 1000;
 constexpr uint32_t HEALTH_TIMEOUT_MS = 2000;
@@ -277,6 +285,11 @@ void register_can_event_handlers() {
             dc_lift_health[1].last_response_ms = (uint32_t)millis();
             break;
           }
+          case 0x32: {  // crub_igniter ヘルスチェック応答
+            crab_health.alive = true;
+            crab_health.last_response_ms = (uint32_t)millis();
+            break;
+          }
         }
       });
 }
@@ -470,6 +483,7 @@ IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
     feedback_msg.ring_2 = {current.ring_2.pos, current.ring_2.state};
     feedback_msg.crab.vgoal_led = current.crab.vgoal_led;
     feedback_msg.crab.error_led = current.crab.error_led;
+    feedback_msg.crab.crab_alive = crab_health.alive;
     feedback_msg.servo_front_alive = servo_health[0].alive;
     feedback_msg.servo_rear_alive = servo_health[1].alive;
     feedback_msg.dc_lift_front_alive = dc_lift_health[0].alive;
@@ -602,7 +616,8 @@ void ControlTask(void* pvParameters) {
       if (now_ms - last_health_request_ms >= HEALTH_REQUEST_INTERVAL_MS) {
         last_health_request_ms = now_ms;
         for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear,
-                          can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear}) {
+                          can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear,
+                          can::CanDest::crab_led}) {
           can_comm->transmit(can::CanTxMessageBuilder()
                                  .set_dest(dest)
                                  .set_command(0xFF)
@@ -637,6 +652,21 @@ void ControlTask(void* pvParameters) {
             Serial.printf("dc_lift %s: timeout\n", dc_names[i]);
           } else if (!was_alive && dc_lift_health[i].alive) {
             Serial.printf("dc_lift %s: alive\n", dc_names[i]);
+          }
+#endif
+        }
+        // crub_igniter タイムアウト判定
+        {
+          bool was_alive = crab_health.alive;
+          if (crab_health.last_response_ms != 0 &&
+              now_ms - crab_health.last_response_ms >= HEALTH_TIMEOUT_MS) {
+            crab_health.alive = false;
+          }
+#if (MICRO_ROS_TRANSPORT_ARDUINO_SERIAL != 1)
+          if (was_alive && !crab_health.alive) {
+            Serial.println("crab: timeout");
+          } else if (!was_alive && crab_health.alive) {
+            Serial.println("crab: alive");
           }
 #endif
         }
