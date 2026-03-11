@@ -724,11 +724,23 @@ void ControlTask(void* pvParameters) {
             hc_step = 7; hc_time = now_ms;
           }
           break;
-        case 7:  // 1200ms後: リフト 停止 → 完了
+        case 7:  // 1200ms後: リフト 停止
           if (elapsed >= 1200) {
             for (auto dest : {can::CanDest::dc_lift_front, can::CanDest::dc_lift_rear}) {
               can_comm->transmit(can::CanTxMessageBuilder().set_dest(dest).set_command(0x02).build());
             }
+            hc_step = 8; hc_time = now_ms;
+          }
+          break;
+        case 8:  // vgoal_led + error_led ON
+          can_comm->transmit(can::CanTxMessageBuilder().set_dest(can::CanDest::crab_led).set_command(0x01).build());
+          can_comm->transmit(can::CanTxMessageBuilder().set_dest(can::CanDest::crab_led).set_command(0x11).build());
+          hc_step = 9; hc_time = now_ms;
+          break;
+        case 9:  // 500ms後: vgoal_led + error_led OFF → 完了
+          if (elapsed >= 500) {
+            can_comm->transmit(can::CanTxMessageBuilder().set_dest(can::CanDest::crab_led).set_command(0x00).build());
+            can_comm->transmit(can::CanTxMessageBuilder().set_dest(can::CanDest::crab_led).set_command(0x10).build());
             hc_active = false; hc_step = 0;
           }
           break;
