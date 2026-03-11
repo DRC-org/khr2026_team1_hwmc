@@ -428,6 +428,8 @@ IRAM_ATTR void timer_feedback_callback(rcl_timer_t* timer,
     feedback_msg.yagura_2 = {current.yagura_2.pos, current.yagura_2.state};
     feedback_msg.ring_1 = {current.ring_1.pos, current.ring_1.state};
     feedback_msg.ring_2 = {current.ring_2.pos, current.ring_2.state};
+    feedback_msg.servo_front_alive = servo_health[0].alive;
+    feedback_msg.servo_rear_alive = servo_health[1].alive;
 
     xSemaphoreGive(DataMutex);
   }
