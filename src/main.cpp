@@ -56,6 +56,20 @@ volatile bool hc_active = false;
 volatile uint8_t hc_step = 0;
 volatile uint32_t hc_time = 0;
 
+// サーボ基板ヘルスチェック状態
+struct ServoHealthState {
+  volatile bool alive = false;
+  volatile uint32_t last_response_ms = 0;
+  volatile uint8_t ring_hand_state = 0;
+  volatile uint8_t yagura_state = 0;
+  volatile uint8_t touch_sensor = 0;
+};
+
+ServoHealthState servo_health[2];  // [0]=front(0x400), [1]=rear(0x401)
+uint32_t last_health_request_ms = 0;
+constexpr uint32_t HEALTH_REQUEST_INTERVAL_MS = 1000;
+constexpr uint32_t HEALTH_TIMEOUT_MS = 2000;
+
 // 各アクチュエータの状態
 struct ActuatorState {
   uint8_t
@@ -88,38 +102,63 @@ void register_can_event_handlers() {
         // Mutex を使うと Core 0 の micro-ROS タスクとの競合で
         // フィードバックがドロップされるため、ここでは使わない。
         switch (identifier) {
+          // 古いフィードバックによる再送ループ防止:
+          // コマンド方向と一致する完了通知のみ受理する
           case 0x30:  // 昇降 1 動作完了
-            current.yagura_1.pos =
-                (target == 0x00)
-                    ? robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE
-                    : robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+            if (target == 0x00 &&
+                current.yagura_1.pos ==
+                    robot_msgs__msg__YaguraMechanism__POS_DOWN) {
+              current.yagura_1.pos =
+                  robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE;
+            } else if (target == 0x01 &&
+                       current.yagura_1.pos ==
+                           robot_msgs__msg__YaguraMechanism__POS_UP) {
+              current.yagura_1.pos =
+                  robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+            }
             break;
           case 0x31:  // 昇降 2 動作完了
-            current.yagura_2.pos =
-                (target == 0x00)
-                    ? robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE
-                    : robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+            if (target == 0x00 &&
+                current.yagura_2.pos ==
+                    robot_msgs__msg__YaguraMechanism__POS_DOWN) {
+              current.yagura_2.pos =
+                  robot_msgs__msg__YaguraMechanism__POS_DOWN_DONE;
+            } else if (target == 0x01 &&
+                       current.yagura_2.pos ==
+                           robot_msgs__msg__YaguraMechanism__POS_UP) {
+              current.yagura_2.pos =
+                  robot_msgs__msg__YaguraMechanism__POS_UP_DONE;
+            }
             break;
           case 0x40:  // リングハンド 1 動作完了（開閉）
-            current.ring_1.state =
-                (target == 0x00)
-                    ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+            if (target == 0x00 &&
+                current.ring_1.state ==
+                    robot_msgs__msg__RingMechanism__STATE_CLOSE) {
+              current.ring_1.state =
+                  robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE;
+            } else if (target == 0x01 &&
+                       current.ring_1.state ==
+                           robot_msgs__msg__RingMechanism__STATE_OPEN) {
+              current.ring_1.state =
+                  robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+            }
             break;
           case 0x41:  // リングハンド 1 移動完了（位置）
-            switch (target) {
-              case 0x00:
-                current.ring_1.pos =
-                    robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
-                break;
-              case 0x01:
-                current.ring_1.pos =
-                    robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
-                break;
-              case 0x02:
-                current.ring_1.pos =
-                    robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
-                break;
+            if (target == 0x00 &&
+                current.ring_1.pos ==
+                    robot_msgs__msg__RingMechanism__POS_PICKUP) {
+              current.ring_1.pos =
+                  robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
+            } else if (target == 0x01 &&
+                       current.ring_1.pos ==
+                           robot_msgs__msg__RingMechanism__POS_YAGURA) {
+              current.ring_1.pos =
+                  robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
+            } else if (target == 0x02 &&
+                       current.ring_1.pos ==
+                           robot_msgs__msg__RingMechanism__POS_HONMARU) {
+              current.ring_1.pos =
+                  robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
             }
             break;
           case 0x42:  // リングハンド 1 把持失敗
@@ -133,31 +172,47 @@ void register_can_event_handlers() {
             }
             break;
           case 0x43:  // 櫓ハンド 1 動作完了
-            current.yagura_1.state =
-                (target == 0x00)
-                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            if (target == 0x00 &&
+                current.yagura_1.state ==
+                    robot_msgs__msg__YaguraMechanism__STATE_CLOSE) {
+              current.yagura_1.state =
+                  robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE;
+            } else if (target == 0x01 &&
+                       current.yagura_1.state ==
+                           robot_msgs__msg__YaguraMechanism__STATE_OPEN) {
+              current.yagura_1.state =
+                  robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            }
             break;
           case 0x4A:  // リングハンド 2 動作完了（開閉）
-            current.ring_2.state =
-                (target == 0x00)
-                    ? robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+            if (target == 0x00 &&
+                current.ring_2.state ==
+                    robot_msgs__msg__RingMechanism__STATE_CLOSE) {
+              current.ring_2.state =
+                  robot_msgs__msg__RingMechanism__STATE_CLOSE_DONE;
+            } else if (target == 0x01 &&
+                       current.ring_2.state ==
+                           robot_msgs__msg__RingMechanism__STATE_OPEN) {
+              current.ring_2.state =
+                  robot_msgs__msg__RingMechanism__STATE_OPEN_DONE;
+            }
             break;
           case 0x4B:  // リングハンド 2 移動完了（位置）
-            switch (target) {
-              case 0x00:
-                current.ring_2.pos =
-                    robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
-                break;
-              case 0x01:
-                current.ring_2.pos =
-                    robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
-                break;
-              case 0x02:
-                current.ring_2.pos =
-                    robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
-                break;
+            if (target == 0x00 &&
+                current.ring_2.pos ==
+                    robot_msgs__msg__RingMechanism__POS_PICKUP) {
+              current.ring_2.pos =
+                  robot_msgs__msg__RingMechanism__POS_PICKUP_DONE;
+            } else if (target == 0x01 &&
+                       current.ring_2.pos ==
+                           robot_msgs__msg__RingMechanism__POS_YAGURA) {
+              current.ring_2.pos =
+                  robot_msgs__msg__RingMechanism__POS_YAGURA_DONE;
+            } else if (target == 0x02 &&
+                       current.ring_2.pos ==
+                           robot_msgs__msg__RingMechanism__POS_HONMARU) {
+              current.ring_2.pos =
+                  robot_msgs__msg__RingMechanism__POS_HONMARU_DONE;
             }
             break;
           case 0x4C:  // リングハンド 2 把持失敗
@@ -171,11 +226,34 @@ void register_can_event_handlers() {
             }
             break;
           case 0x4D:  // 櫓ハンド 2 動作完了
-            current.yagura_2.state =
-                (target == 0x00)
-                    ? robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE
-                    : robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            if (target == 0x00 &&
+                current.yagura_2.state ==
+                    robot_msgs__msg__YaguraMechanism__STATE_CLOSE) {
+              current.yagura_2.state =
+                  robot_msgs__msg__YaguraMechanism__STATE_CLOSE_DONE;
+            } else if (target == 0x01 &&
+                       current.yagura_2.state ==
+                           robot_msgs__msg__YaguraMechanism__STATE_OPEN) {
+              current.yagura_2.state =
+                  robot_msgs__msg__YaguraMechanism__STATE_OPEN_DONE;
+            }
             break;
+          case 0x44: {  // サーボ基板 front ヘルスチェック応答
+            servo_health[0].alive = true;
+            servo_health[0].last_response_ms = (uint32_t)millis();
+            servo_health[0].ring_hand_state = data[1];
+            servo_health[0].yagura_state = data[2];
+            servo_health[0].touch_sensor = data[3];
+            break;
+          }
+          case 0x4E: {  // サーボ基板 rear ヘルスチェック応答
+            servo_health[1].alive = true;
+            servo_health[1].last_response_ms = (uint32_t)millis();
+            servo_health[1].ring_hand_state = data[1];
+            servo_health[1].yagura_state = data[2];
+            servo_health[1].touch_sensor = data[3];
+            break;
+          }
         }
       });
 }
@@ -471,6 +549,36 @@ void ControlTask(void* pvParameters) {
   while (1) {
     // CAN 受信処理（キューを 1 つずつ処理）
     can_comm->process_received_messages();
+
+    // サーボ基板へ定期ヘルスチェック要求
+    {
+      uint32_t now_ms = (uint32_t)millis();
+      if (now_ms - last_health_request_ms >= HEALTH_REQUEST_INTERVAL_MS) {
+        last_health_request_ms = now_ms;
+        for (auto dest : {can::CanDest::servo_front, can::CanDest::servo_rear}) {
+          can_comm->transmit(can::CanTxMessageBuilder()
+                                 .set_dest(dest)
+                                 .set_command(0xFF)
+                                 .build());
+        }
+        // タイムアウト判定
+        const char* names[] = {"front", "rear"};
+        for (int i = 0; i < 2; i++) {
+          bool was_alive = servo_health[i].alive;
+          if (servo_health[i].last_response_ms != 0 &&
+              now_ms - servo_health[i].last_response_ms >= HEALTH_TIMEOUT_MS) {
+            servo_health[i].alive = false;
+          }
+#if (MICRO_ROS_TRANSPORT_ARDUINO_SERIAL != 1)
+          if (was_alive && !servo_health[i].alive) {
+            Serial.printf("servo %s: timeout\n", names[i]);
+          } else if (!was_alive && servo_health[i].alive) {
+            Serial.printf("servo %s: alive\n", names[i]);
+          }
+#endif
+        }
+      }
+    }
 
     // 動的ヘルスチェック状態機械
     if (hc_active) {
