@@ -424,6 +424,14 @@ IRAM_ATTR void on_control_command(const void* msg_in) {
                              .set_value(0x02)
                              .build());
       cur_mut.pos = robot_msgs__msg__RingMechanism__POS_HONMARU;
+    } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_INIT &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_INIT &&
+               cur.pos != robot_msgs__msg__RingMechanism__POS_INIT_DONE) {
+      can_comm->transmit(can::CanTxMessageBuilder()
+                             .set_dest(sv_dest)
+                             .set_command(0x30)
+                             .build());
+      cur_mut.pos = robot_msgs__msg__RingMechanism__POS_INIT_DONE;
     } else if (tgt.pos == robot_msgs__msg__RingMechanism__POS_STOPPED &&
                cur.pos != robot_msgs__msg__RingMechanism__POS_STOPPED) {
       can_comm->transmit(can::CanTxMessageBuilder()
